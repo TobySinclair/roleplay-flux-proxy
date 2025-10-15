@@ -1,0 +1,26 @@
+{
+  "name": "roleplay-flux-proxy",
+  "version": "1.0.0",
+  "description": "Deepgram FLUX Proxy Server for RealTalk Studio",
+  "main": "server-flux-proxy.js",
+  "scripts": {
+    "start": "node server-flux-proxy.js",
+    "dev": "node server-flux-proxy.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "deepgram",
+    "flux",
+    "websocket",
+    "proxy",
+    "speech-to-text"
+  ],
+  "author": "RealTalk Studio",
+  "license": "MIT"
+}
