@@ -55,3 +55,4 @@ Visit: `https://your-app.up.railway.app/health`
 - `DEEPGRAM_API_KEY` - Your Deepgram API key (required)
 - `FLUX_PROXY_PORT` - Port to run on (default: 3001)
 - `NEXT_PUBLIC_FLUX_PROXY_URL` - Public WebSocket URL (set by Railway)
+
