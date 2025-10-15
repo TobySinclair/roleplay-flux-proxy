@@ -7,14 +7,17 @@ const WebSocket = require('ws');
 const { URL } = require('url');
 
 // Configuration from environment variables
-const PORT = process.env.FLUX_PROXY_PORT || 3001;
+// Railway uses PORT environment variable, fallback to FLUX_PROXY_PORT or 3001
+const PORT = process.env.PORT || process.env.FLUX_PROXY_PORT || 3001;
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY || 'ff7fdcc7b7a2cec8d7249c122e941a0c389cac70';
 
 console.log('🚀 Starting FLUX proxy server (language-based activation)');
 console.log('🔍 Debug: Environment variables check:');
+console.log('   PORT (Railway):', process.env.PORT);
+console.log('   FLUX_PROXY_PORT:', process.env.FLUX_PROXY_PORT);
+console.log('   Using PORT:', PORT);
 console.log('   DEEPGRAM_API_KEY exists:', !!process.env.DEEPGRAM_API_KEY);
 console.log('   NEXT_PUBLIC_DEEPGRAM_API_KEY exists:', !!process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
-console.log('   FLUX_PROXY_PORT:', process.env.FLUX_PROXY_PORT);
 console.log('   All env vars starting with DEEPGRAM:', Object.keys(process.env).filter(key => key.startsWith('DEEPGRAM')));
 console.log('   All env vars starting with NEXT_PUBLIC:', Object.keys(process.env).filter(key => key.startsWith('NEXT_PUBLIC')));
 console.log('   Total env vars:', Object.keys(process.env).length);
