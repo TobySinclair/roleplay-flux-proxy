@@ -11,6 +11,13 @@ const PORT = process.env.FLUX_PROXY_PORT || 3001;
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
 
 console.log('🚀 Starting FLUX proxy server (language-based activation)');
+console.log('🔍 Debug: Environment variables check:');
+console.log('   DEEPGRAM_API_KEY exists:', !!process.env.DEEPGRAM_API_KEY);
+console.log('   NEXT_PUBLIC_DEEPGRAM_API_KEY exists:', !!process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY);
+console.log('   FLUX_PROXY_PORT:', process.env.FLUX_PROXY_PORT);
+if (process.env.DEEPGRAM_API_KEY) {
+  console.log('   DEEPGRAM_API_KEY length:', process.env.DEEPGRAM_API_KEY.length);
+}
 
 if (!DEEPGRAM_API_KEY) {
   console.error('❌ DEEPGRAM_API_KEY environment variable is required!');
