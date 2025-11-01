@@ -156,6 +156,11 @@ wsServer.on('connection', async (clientWs, req) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const searchParams = url.searchParams;
 
+  // Add mip_opt_out=true to exclude from Model Improvement Program
+  if (!searchParams.has('mip_opt_out')) {
+    searchParams.set('mip_opt_out', 'true');
+  }
+
   // Build Deepgram WebSocket URL with client parameters
   const deepgramUrl = `wss://api.deepgram.com/v2/listen?${searchParams.toString()}`;
 
