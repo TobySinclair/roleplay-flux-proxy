@@ -9,6 +9,7 @@ const { URL } = require('url');
 // Configuration from environment variables
 // Railway uses PORT environment variable, fallback to FLUX_PROXY_PORT or 3001
 const PORT = process.env.PORT || process.env.FLUX_PROXY_PORT || 3001;
+const DEEPGRAM_HOST = process.env.DEEPGRAM_HOST || 'api.eu.deepgram.com';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY || 'ff7fdcc7b7a2cec8d7249c122e941a0c389cac70';
 
 console.log('🚀 Starting FLUX proxy server (language-based activation)');
@@ -34,7 +35,7 @@ if (!DEEPGRAM_API_KEY) {
 
 // Connectivity test function for FLUX API
 async function testFluxApiConnectivity() {
-  const testUrl = 'api.deepgram.com';
+  const testUrl = DEEPGRAM_HOST;
   const port = 443; // HTTPS/WSS port
 
   console.log('\n🔍 Testing FLUX API Connectivity...');
@@ -162,7 +163,7 @@ wsServer.on('connection', async (clientWs, req) => {
   }
 
   // Build Deepgram WebSocket URL with client parameters
-  const deepgramUrl = `wss://api.deepgram.com/v2/listen?${searchParams.toString()}`;
+  const deepgramUrl = `wss://${DEEPGRAM_HOST}/v2/listen?${searchParams.toString()}`;
 
   console.log(`\n🎯 [Connection #${connectionId}] Preparing FLUX API Connection:`);
   console.log(`   Full URL: ${deepgramUrl}`);
@@ -349,6 +350,7 @@ server.listen(PORT, async () => {
   console.log(`🌐 HTTP server running at http://localhost:${PORT}`);
   console.log(`🔌 WebSocket proxy running on ws://localhost:${PORT}`);
   console.log(`🔑 Using API key: ${DEEPGRAM_API_KEY.substring(0, 8)}...${DEEPGRAM_API_KEY.substring(DEEPGRAM_API_KEY.length - 4)}`);
+  console.log(`🌍 Deepgram host: ${DEEPGRAM_HOST}`);
   console.log(`✅ FLUX enabled: true (language-based activation)`);
   console.log('📝 Health check: http://localhost:' + PORT + '/health');
 
@@ -370,7 +372,7 @@ server.listen(PORT, async () => {
   }
 
   console.log('\n' + '='.repeat(60));
-  console.log('🎯 FLUX API Target: wss://api.deepgram.com/v2/listen');
+  console.log(`🎯 FLUX API Target: wss://${DEEPGRAM_HOST}/v2/listen`);
   console.log('📊 Ready to accept client connections...');
   console.log('='.repeat(60) + '\n');
 });
