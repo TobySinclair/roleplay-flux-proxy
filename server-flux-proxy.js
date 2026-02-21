@@ -10,7 +10,7 @@ const { URL } = require('url');
 // Railway uses PORT environment variable, fallback to FLUX_PROXY_PORT or 3001
 const PORT = process.env.PORT || process.env.FLUX_PROXY_PORT || 3001;
 const DEEPGRAM_HOST = process.env.DEEPGRAM_HOST || 'api.eu.deepgram.com';
-const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY || 'ff7fdcc7b7a2cec8d7249c122e941a0c389cac70';
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
 
 console.log('🚀 Starting FLUX proxy server (language-based activation)');
 console.log('🔍 Debug: Environment variables check:');
