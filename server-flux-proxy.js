@@ -13,6 +13,27 @@ const DEEPGRAM_HOST = process.env.DEEPGRAM_HOST || 'api.eu.deepgram.com';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
 
 console.log('🚀 Starting FLUX proxy server (language-based activation)');
+
+// Flux model catalog
+// - flux-general-en: English-only Flux
+// - flux-general-multi: Multilingual Flux (Early Access) — 10 languages with
+//   language hinting, auto-detection, and codeswitching.
+const FLUX_MODELS = {
+  'flux-general-en': {
+    label: 'Flux General (English)',
+    multilingual: false,
+    languages: ['en'],
+  },
+  'flux-general-multi': {
+    label: 'Flux General (Multilingual, Early Access)',
+    multilingual: true,
+    // Officially supported languages for flux-general-multi
+    languages: ['en', 'es', 'fr', 'de', 'hi', 'ru', 'pt', 'ja', 'it', 'nl'],
+  },
+};
+
+const MULTILINGUAL_SUPPORTED_LANGUAGES = FLUX_MODELS['flux-general-multi'].languages;
+
 console.log('🔍 Debug: Environment variables check:');
 console.log('   PORT (Railway):', process.env.PORT);
 console.log('   FLUX_PROXY_PORT:', process.env.FLUX_PROXY_PORT);
@@ -91,10 +112,16 @@ const server = http.createServer((req, res) => {
   // Health check endpoint
   if (parsedUrl.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      status: 'ok', 
+    res.end(JSON.stringify({
+      status: 'ok',
       flux_enabled: true,
       port: PORT,
+      deepgram_host: DEEPGRAM_HOST,
+      supported_models: Object.keys(FLUX_MODELS),
+      multilingual: {
+        model: 'flux-general-multi',
+        languages: MULTILINGUAL_SUPPORTED_LANGUAGES,
+      },
       timestamp: new Date().toISOString()
     }));
     return;
@@ -125,7 +152,17 @@ const server = http.createServer((req, res) => {
           </div>
           <h2>Usage</h2>
           <p>Connect your client to <code>ws://localhost:${PORT}</code> with your Deepgram query parameters.</p>
-          <p>Example: <code>ws://localhost:${PORT}?model=flux-general-en&smart_format=true</code></p>
+          <p><strong>English (GA):</strong> <code>ws://localhost:${PORT}?model=flux-general-en&amp;smart_format=true</code></p>
+          <p><strong>Multilingual (Early Access):</strong> <code>ws://localhost:${PORT}?model=flux-general-multi&amp;language_hint=es&amp;language_hint=en</code></p>
+          <h2>Flux Multilingual (Early Access)</h2>
+          <p>Model: <code>flux-general-multi</code></p>
+          <p>Supported languages: <code>${MULTILINGUAL_SUPPORTED_LANGUAGES.join(', ')}</code></p>
+          <ul>
+            <li><strong>Language hinting</strong> — pass one or more <code>language_hint=&lt;code&gt;</code> params (e.g. <code>language_hint=es&amp;language_hint=en</code>).</li>
+            <li><strong>Auto-detection</strong> — omit <code>language_hint</code> entirely.</li>
+            <li><strong>Codeswitching</strong> — handled natively mid-sentence.</li>
+            <li><strong>Reconfigurable</strong> — update language hints mid-connection via a <code>Configure</code> message.</li>
+          </ul>
         </body>
       </html>
     `);
@@ -162,10 +199,34 @@ wsServer.on('connection', async (clientWs, req) => {
     searchParams.set('mip_opt_out', 'true');
   }
 
+  // Inspect Flux model + language hints
+  const requestedModel = searchParams.get('model') || '(none)';
+  const languageHints = searchParams.getAll('language_hint');
+  const modelInfo = FLUX_MODELS[requestedModel];
+  const isMultilingual = !!(modelInfo && modelInfo.multilingual);
+
+  if (isMultilingual) {
+    if (languageHints.length === 0) {
+      console.log(`🌐 [Connection #${connectionId}] Flux Multilingual: auto-detect mode (no language_hint provided)`);
+    } else {
+      console.log(`🌐 [Connection #${connectionId}] Flux Multilingual language hints: ${languageHints.join(', ')}`);
+      const unsupported = languageHints.filter(l => !MULTILINGUAL_SUPPORTED_LANGUAGES.includes(l));
+      if (unsupported.length > 0) {
+        console.warn(`⚠️  [Connection #${connectionId}] Unsupported language_hint(s) for flux-general-multi: ${unsupported.join(', ')}`);
+        console.warn(`   Supported: ${MULTILINGUAL_SUPPORTED_LANGUAGES.join(', ')}`);
+      }
+    }
+  } else if (requestedModel !== '(none)' && !modelInfo) {
+    console.warn(`⚠️  [Connection #${connectionId}] Unknown Flux model '${requestedModel}'. Known: ${Object.keys(FLUX_MODELS).join(', ')}`);
+  }
+
   // Build Deepgram WebSocket URL with client parameters
+  // Note: URLSearchParams.toString() preserves duplicate keys, which is
+  // required for multiple language_hint values (e.g. language_hint=es&language_hint=en).
   const deepgramUrl = `wss://${DEEPGRAM_HOST}/v2/listen?${searchParams.toString()}`;
 
   console.log(`\n🎯 [Connection #${connectionId}] Preparing FLUX API Connection:`);
+  console.log(`   Model: ${requestedModel}${modelInfo ? ` (${modelInfo.label})` : ''}`);
   console.log(`   Full URL: ${deepgramUrl}`);
   console.log(`   Parameters: ${Array.from(searchParams.entries()).map(([k, v]) => `${k}=${v}`).join(', ')}`);
 
@@ -193,7 +254,7 @@ wsServer.on('connection', async (clientWs, req) => {
 
   // Forward messages from client to Deepgram
   let messageCount = 0;
-  clientWs.on('message', (data) => {
+  clientWs.on('message', (data, isBinary) => {
     messageCount++;
 
     // Log first few messages and periodically thereafter
@@ -201,8 +262,33 @@ wsServer.on('connection', async (clientWs, req) => {
       console.log(`📤 [Connection #${connectionId}] Client->Deepgram message ${messageCount}: ${data.byteLength || data.length} bytes`);
     }
 
+    // Detect control messages (e.g. Configure for mid-connection language hint updates on flux-general-multi).
+    // Control messages are JSON text frames; audio is binary. Only attempt a parse on small text frames.
+    if (!isBinary && (data.byteLength || data.length) < 4096) {
+      try {
+        const text = data.toString('utf8');
+        if (text.length > 0 && text[0] === '{') {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === 'object' && parsed.type) {
+            if (parsed.type === 'Configure') {
+              const newHints = Array.isArray(parsed.language_hint)
+                ? parsed.language_hint
+                : parsed.language_hint
+                  ? [parsed.language_hint]
+                  : [];
+              console.log(`🛠️  [Connection #${connectionId}] Configure received. language_hint=${newHints.length ? newHints.join(',') : '(auto-detect)'}`);
+            } else {
+              console.log(`🛠️  [Connection #${connectionId}] Control message: ${parsed.type}`);
+            }
+          }
+        }
+      } catch {
+        // Not JSON — fall through and forward as-is.
+      }
+    }
+
     if (deepgramWs.readyState === WebSocket.OPEN) {
-      deepgramWs.send(data);
+      deepgramWs.send(data, { binary: isBinary });
     } else {
       if (messageCount <= 3) {
         console.log(`❌ [Connection #${connectionId}] Cannot forward to Deepgram: readyState=${deepgramWs.readyState}`);
@@ -373,6 +459,10 @@ server.listen(PORT, async () => {
 
   console.log('\n' + '='.repeat(60));
   console.log(`🎯 FLUX API Target: wss://${DEEPGRAM_HOST}/v2/listen`);
+  console.log('🤖 Supported Flux models:');
+  for (const [id, info] of Object.entries(FLUX_MODELS)) {
+    console.log(`   - ${id}: ${info.label}${info.multilingual ? ` [${info.languages.join(', ')}]` : ''}`);
+  }
   console.log('📊 Ready to accept client connections...');
   console.log('='.repeat(60) + '\n');
 });
