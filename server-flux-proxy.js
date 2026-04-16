@@ -254,6 +254,7 @@ wsServer.on('connection', async (clientWs, req) => {
 
   // Forward messages from client to Deepgram
   let messageCount = 0;
+  let droppedKeepAliveCount = 0;
   clientWs.on('message', (data, isBinary) => {
     messageCount++;
 
@@ -262,14 +263,24 @@ wsServer.on('connection', async (clientWs, req) => {
       console.log(`📤 [Connection #${connectionId}] Client->Deepgram message ${messageCount}: ${data.byteLength || data.length} bytes`);
     }
 
-    // Detect control messages (e.g. Configure for mid-connection language hint updates on flux-general-multi).
-    // Control messages are JSON text frames; audio is binary. Only attempt a parse on small text frames.
+    // Inspect text frames. Flux does not accept legacy {"type":"KeepAlive"}
+    // frames — forwarding them triggers UNPARSABLE_CLIENT_MESSAGE and a close,
+    // which then causes a client-side retry storm. Drop them at the proxy.
+    // Also log other control messages (e.g. Configure for mid-connection
+    // language_hint updates on flux-general-multi) but still forward those.
     if (!isBinary && (data.byteLength || data.length) < 4096) {
-      try {
-        const text = data.toString('utf8');
-        if (text.length > 0 && text[0] === '{') {
-          const parsed = JSON.parse(text);
+      const trimmed = data.toString('utf8').trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
           if (parsed && typeof parsed === 'object' && parsed.type) {
+            if (parsed.type === 'KeepAlive') {
+              droppedKeepAliveCount++;
+              if (droppedKeepAliveCount <= 3 || droppedKeepAliveCount % 50 === 0) {
+                console.log(`🛡️  [Connection #${connectionId}] Dropped legacy KeepAlive (count=${droppedKeepAliveCount})`);
+              }
+              return; // do NOT forward to Deepgram
+            }
             if (parsed.type === 'Configure') {
               const newHints = Array.isArray(parsed.language_hint)
                 ? parsed.language_hint
@@ -281,9 +292,9 @@ wsServer.on('connection', async (clientWs, req) => {
               console.log(`🛠️  [Connection #${connectionId}] Control message: ${parsed.type}`);
             }
           }
+        } catch {
+          // Not JSON — fall through and forward as-is.
         }
-      } catch {
-        // Not JSON — fall through and forward as-is.
       }
     }
 
