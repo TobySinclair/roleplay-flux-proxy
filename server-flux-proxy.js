@@ -3,6 +3,7 @@ require('dotenv').config();
 
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const { URL } = require('url');
 
@@ -185,10 +186,27 @@ wsServer.on('connection', async (clientWs, req) => {
   totalConnections++;
   const connectionId = totalConnections;
 
+  const connectStartedAt = Date.now();
+  const ua = req.headers['user-agent'] || '';
+  const origin = req.headers['origin'] || '';
+  const referer = req.headers['referer'] || '';
+  const ip = req.socket.remoteAddress || '';
+  const uaHash = crypto.createHash('sha1').update(ua).digest('hex').slice(0, 8);
+  const clientKey = `${ip}|${uaHash}`;
+
   console.log(`\n🔌 [Connection #${connectionId}] Client connected`);
-  console.log(`   Client IP: ${req.socket.remoteAddress}`);
-  console.log(`   User-Agent: ${req.headers['user-agent'] || 'Unknown'}`);
+  console.log(`   Client IP: ${ip}`);
+  console.log(`   User-Agent: ${ua || 'Unknown'}`);
   console.log(`   Active connections: ${activeConnections}`);
+  console.log(JSON.stringify({
+    evt: 'client_connect',
+    connectionId,
+    clientKey,
+    ts: new Date(connectStartedAt).toISOString(),
+    ua,
+    origin,
+    referer,
+  }));
 
   // Extract query parameters from the client request
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -243,12 +261,24 @@ wsServer.on('connection', async (clientWs, req) => {
   // Single guarded cleanup with idle timeout to prevent double-decrement of
   // activeConnections and to tear down abandoned upstream Deepgram sockets.
   let cleaned = false;
-  let lastClientActivity = Date.now();
+  let receivedClientMessages = 0;
+  let receivedDeepgramMessages = 0;
   const IDLE_TIMEOUT_MS = 30_000;
+  let idleTimer = null;
+  const resetIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      console.warn(`⌛ [Connection #${connectionId}] idle ${IDLE_TIMEOUT_MS}ms, closing`);
+      cleanup('idle-timeout-30s');
+    }, IDLE_TIMEOUT_MS);
+  };
   const cleanup = (reason) => {
     if (cleaned) return;
     cleaned = true;
-    clearInterval(idleInterval);
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
     try {
       if (deepgramWs.readyState === WebSocket.OPEN || deepgramWs.readyState === WebSocket.CONNECTING) {
         deepgramWs.close();
@@ -260,20 +290,27 @@ wsServer.on('connection', async (clientWs, req) => {
       }
     } catch {}
     activeConnections--;
+    const lifetimeMs = Date.now() - connectStartedAt;
     console.log(`🧹 [Connection #${connectionId}] cleanup (${reason}). Active: ${activeConnections}`);
+    console.log(JSON.stringify({
+      evt: 'client_cleanup',
+      connectionId,
+      clientKey,
+      reason,
+      lifetimeMs,
+      receivedClientMessages,
+      receivedDeepgramMessages,
+      ts: new Date().toISOString(),
+    }));
   };
-  const idleInterval = setInterval(() => {
-    if (Date.now() - lastClientActivity > IDLE_TIMEOUT_MS) {
-      console.warn(`⌛ [Connection #${connectionId}] idle ${IDLE_TIMEOUT_MS}ms, closing`);
-      cleanup('idle-timeout');
-    }
-  }, 5_000);
+  resetIdleTimer();
 
   // Forward messages from client to Deepgram
   let messageCount = 0;
   let droppedKeepAliveCount = 0;
   clientWs.on('message', (data, isBinary) => {
-    lastClientActivity = Date.now();
+    resetIdleTimer();
+    receivedClientMessages++;
     messageCount++;
 
     // Log first few messages and periodically thereafter
@@ -328,6 +365,7 @@ wsServer.on('connection', async (clientWs, req) => {
   // Forward messages from Deepgram to client
   let responseCount = 0;
   deepgramWs.on('message', (data) => {
+    receivedDeepgramMessages++;
     responseCount++;
 
     // Convert data to string if it's binary
@@ -409,8 +447,13 @@ wsServer.on('connection', async (clientWs, req) => {
         code !== 1006 &&
         ((code >= 1000 && code <= 1015) || (code >= 3000 && code <= 4999));
       const closeCode = isValidWireCode ? code : 1011;
+      // Close-frame reason payload is capped at 123 bytes per RFC 6455.
+      let truncatedReason = Buffer.from(reasonStr, 'utf8');
+      if (truncatedReason.length > 123) {
+        truncatedReason = truncatedReason.subarray(0, 123);
+      }
       try {
-        clientWs.close(closeCode, reasonStr);
+        clientWs.close(closeCode, truncatedReason);
       } catch (err) {
         console.error(`⚠️ [Connection #${connectionId}] Failed to close client socket:`, err.message);
         try {
