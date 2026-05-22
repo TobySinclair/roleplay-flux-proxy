@@ -230,18 +230,6 @@ wsServer.on('connection', async (clientWs, req) => {
   console.log(`   Full URL: ${deepgramUrl}`);
   console.log(`   Parameters: ${Array.from(searchParams.entries()).map(([k, v]) => `${k}=${v}`).join(', ')}`);
 
-  // Test connectivity before attempting WebSocket connection
-  console.log(`\n🧪 [Connection #${connectionId}] Pre-connection connectivity test:`);
-  const connectivityTest = await testFluxApiConnectivity();
-
-  if (!connectivityTest.success) {
-    console.log(`❌ [Connection #${connectionId}] Connectivity test failed`);
-    clientWs.close(1002, `FLUX API connectivity test failed: ${connectivityTest.error?.message || 'Unknown error'}`);
-    activeConnections--;
-    return;
-  }
-
-  console.log(`✅ [Connection #${connectionId}] Connectivity test passed`);
   console.log(`\n🚀 [Connection #${connectionId}] Attempting WebSocket connection to FLUX API...`);
   const wsStartTime = Date.now();
 
@@ -252,10 +240,40 @@ wsServer.on('connection', async (clientWs, req) => {
     }
   });
 
+  // Single guarded cleanup with idle timeout to prevent double-decrement of
+  // activeConnections and to tear down abandoned upstream Deepgram sockets.
+  let cleaned = false;
+  let lastClientActivity = Date.now();
+  const IDLE_TIMEOUT_MS = 30_000;
+  const cleanup = (reason) => {
+    if (cleaned) return;
+    cleaned = true;
+    clearInterval(idleInterval);
+    try {
+      if (deepgramWs.readyState === WebSocket.OPEN || deepgramWs.readyState === WebSocket.CONNECTING) {
+        deepgramWs.close();
+      }
+    } catch {}
+    try {
+      if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
+        clientWs.close();
+      }
+    } catch {}
+    activeConnections--;
+    console.log(`🧹 [Connection #${connectionId}] cleanup (${reason}). Active: ${activeConnections}`);
+  };
+  const idleInterval = setInterval(() => {
+    if (Date.now() - lastClientActivity > IDLE_TIMEOUT_MS) {
+      console.warn(`⌛ [Connection #${connectionId}] idle ${IDLE_TIMEOUT_MS}ms, closing`);
+      cleanup('idle-timeout');
+    }
+  }, 5_000);
+
   // Forward messages from client to Deepgram
   let messageCount = 0;
   let droppedKeepAliveCount = 0;
   clientWs.on('message', (data, isBinary) => {
+    lastClientActivity = Date.now();
     messageCount++;
 
     // Log first few messages and periodically thereafter
@@ -356,8 +374,11 @@ wsServer.on('connection', async (clientWs, req) => {
     }
 
     if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.close(1000, `Deepgram error: ${error.message}`);
+      try {
+        clientWs.close(1011, `Deepgram error: ${error.message}`);
+      } catch {}
     }
+    cleanup('deepgram-error');
   });
 
   deepgramWs.on('close', (code, reason) => {
@@ -378,41 +399,37 @@ wsServer.on('connection', async (clientWs, req) => {
     }
 
     if (clientWs.readyState === WebSocket.OPEN) {
-      // Map Deepgram-specific codes to standard WebSocket codes
-      // WebSocket close codes must be in range 1000-1015 or 3000-4999
-      // Deepgram uses 4xxx codes which are valid, but we need to ensure they're numbers
-      const closeCode = typeof code === 'number' && code >= 1000 ? code : 1000;
+      // Per RFC 6455, codes 1005 (No status received) and 1006 (Abnormal
+      // closure) are reserved and MUST NOT appear in a Close frame — passing
+      // them to ws.close() throws. Normalize them (and any out-of-range value)
+      // to 1011 (Internal Error) before forwarding.
+      const isValidWireCode =
+        typeof code === 'number' &&
+        code !== 1005 &&
+        code !== 1006 &&
+        ((code >= 1000 && code <= 1015) || (code >= 3000 && code <= 4999));
+      const closeCode = isValidWireCode ? code : 1011;
       try {
         clientWs.close(closeCode, reasonStr);
       } catch (err) {
         console.error(`⚠️ [Connection #${connectionId}] Failed to close client socket:`, err.message);
-        // Force close without parameters if there's an error
         try {
           clientWs.terminate();
         } catch {}
       }
     }
 
-    activeConnections--;
-    console.log(`   Active connections: ${activeConnections}`);
+    cleanup('deepgram-close');
   });
 
-  // Handle client disconnection
   clientWs.on('close', () => {
     console.log(`🔌 [Connection #${connectionId}] Client disconnected`);
-    if (deepgramWs.readyState === WebSocket.OPEN) {
-      deepgramWs.close();
-    }
-    activeConnections--;
-    console.log(`   Active connections: ${activeConnections}`);
+    cleanup('client-close');
   });
 
   clientWs.on('error', (error) => {
     console.error(`❌ [Connection #${connectionId}] Client connection error:`, error.message);
-    if (deepgramWs.readyState === WebSocket.OPEN) {
-      deepgramWs.close();
-    }
-    activeConnections--;
+    cleanup('client-error');
   });
 });
 
